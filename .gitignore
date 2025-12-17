@@ -1,0 +1,6 @@
+node_modules/
+.env
+.env.local
+eng.traineddata
+dist/
+.DS_Store
