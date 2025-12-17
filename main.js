@@ -15,7 +15,7 @@ function initializeOpenRouter() {
     console.error('OPENROUTER_API_KEY not found in .env file');
     return false;
   }
-  
+
   console.log('OpenRouter initialized successfully');
   return true;
 }
@@ -23,7 +23,7 @@ function initializeOpenRouter() {
 // Create small result window at bottom-right
 function createResultWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  
+
   resultWindow = new BrowserWindow({
     width: 80,
     height: 80,
@@ -98,17 +98,17 @@ function createResultWindow() {
     </body>
     </html>
   `;
-  
+
   resultWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 }
 
 // Show result in window
 function showResult(text) {
   if (!resultWindow || resultWindow.isDestroyed()) return;
-  
+
   resultWindow.webContents.send('update-result', text);
   resultWindow.show();
-  
+
   // Auto-hide after 3 seconds
   setTimeout(() => {
     if (resultWindow && !resultWindow.isDestroyed()) {
@@ -148,19 +148,19 @@ async function analyzeMCQ(imageBuffer) {
     const img = nativeImage.createFromBuffer(imageBuffer);
     const size = img.getSize();
     const maxWidth = 1024;
-    
+
     let resizedImg = img;
     if (size.width > maxWidth) {
       const ratio = maxWidth / size.width;
-      resizedImg = img.resize({ 
-        width: maxWidth, 
+      resizedImg = img.resize({
+        width: maxWidth,
         height: Math.floor(size.height * ratio),
         quality: 'good'
       });
     }
-    
+
     const base64Image = resizedImg.toJPEG(85).toString('base64');
-    
+
     const prompt = `You are an expert MCQ analyzer. Look at this screenshot carefully and analyze the Multiple Choice Question(s).
 
 CRITICAL INSTRUCTIONS:
@@ -175,7 +175,7 @@ IMPORTANT:
 - Just output the single letter answer`;
 
     const payload = JSON.stringify({
-      model: 'openai/gpt-4o-mini',
+      model: 'qwen/qwen-2.5-vl-7b-instruct',
       messages: [
         {
           role: 'user',
@@ -213,11 +213,11 @@ IMPORTANT:
 
       const req = https.request(options, (res) => {
         let responseData = '';
-        
+
         res.on('data', (chunk) => {
           responseData += chunk;
         });
-        
+
         res.on('end', () => {
           if (res.statusCode !== 200) {
             reject(new Error(`API error: ${res.statusCode} - ${responseData}`));
@@ -245,7 +245,7 @@ IMPORTANT:
     });
 
     const text = data.choices[0].message.content.trim().toUpperCase();
-    
+
     // Return only first character to ensure single letter
     return text.charAt(0);
   } catch (error) {
@@ -257,20 +257,20 @@ IMPORTANT:
 // Handle screenshot shortcut
 async function handleScreenshotShortcut() {
   console.log('Screenshot shortcut triggered');
-  
+
   // Show loading spinner
   if (resultWindow && !resultWindow.isDestroyed()) {
     resultWindow.webContents.send('show-loading');
     resultWindow.show();
   }
-  
+
   try {
     const imageBuffer = await captureScreenshot();
     console.log('Screenshot captured');
-    
+
     const result = await analyzeMCQ(imageBuffer);
     console.log('Analysis result:', result);
-    
+
     showResult(result);
   } catch (error) {
     console.error('Error processing screenshot:', error);
@@ -290,7 +290,7 @@ app.whenReady().then(() => {
 
   // Register global shortcut: Ctrl+Shift+Q (not commonly used)
   const registered = globalShortcut.register('CommandOrControl+Shift+Q', handleScreenshotShortcut);
-  
+
   if (registered) {
     console.log('Global shortcut registered: Ctrl+Shift+Q (Cmd+Shift+Q on Mac)');
   } else {
