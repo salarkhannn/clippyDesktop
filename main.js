@@ -2,23 +2,21 @@ require("dotenv").config();
 
 const { app, BrowserWindow, globalShortcut, screen } = require("electron");
 const { desktopCapturer } = require('electron');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const https = require('https');
+const { nativeImage } = require('electron');
 
 let resultWindow = null;
-let genAI = null;
-let model = null;
+let apiKey = null;
 
-// Initialize Gemini
-function initializeGemini() {
-  const apiKey = process.env.GEMINI_API_KEY;
+// Initialize OpenRouter
+function initializeOpenRouter() {
+  apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    console.error('GEMINI_API_KEY not found in .env file');
+    console.error('OPENROUTER_API_KEY not found in .env file');
     return false;
   }
   
-  genAI = new GoogleGenerativeAI(apiKey);
-  model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  console.log('Gemini initialized successfully');
+  console.log('OpenRouter initialized successfully');
   return true;
 }
 
@@ -139,37 +137,114 @@ async function captureScreenshot() {
   }
 }
 
-// Analyze screenshot with Gemini
+// Analyze screenshot with OpenRouter
 async function analyzeMCQ(imageBuffer) {
-  if (!model) {
-    throw new Error('Gemini not initialized');
+  if (!apiKey) {
+    throw new Error('OpenRouter not initialized');
   }
 
   try {
-    const base64Image = imageBuffer.toString('base64');
+    // Compress and resize image to reduce payload size
+    const img = nativeImage.createFromBuffer(imageBuffer);
+    const size = img.getSize();
+    const maxWidth = 1024;
     
-    const prompt = `Analyze this screenshot and detect Multiple Choice Questions (MCQs).
+    let resizedImg = img;
+    if (size.width > maxWidth) {
+      const ratio = maxWidth / size.width;
+      resizedImg = img.resize({ 
+        width: maxWidth, 
+        height: Math.floor(size.height * ratio),
+        quality: 'good'
+      });
+    }
+    
+    const base64Image = resizedImg.toJPEG(85).toString('base64');
+    
+    const prompt = `You are an expert MCQ analyzer. Look at this screenshot carefully and analyze the Multiple Choice Question(s).
 
-Rules:
-1. If there is exactly ONE complete MCQ visible with options (A, B, C, D, etc.), respond with ONLY the letter of the correct answer (e.g., "A", "B", "C", "D").
-2. If there are MULTIPLE MCQs visible on the screen, respond with ONLY the letter "M".
-3. If there are NO MCQs visible on the screen, respond with ONLY the letter "N".
+CRITICAL INSTRUCTIONS:
+1. If there is EXACTLY ONE complete MCQ with options (A, B, C, D, etc.), carefully read and understand the question and ALL options, then respond with ONLY the single letter of the CORRECT answer (A, B, C, or D).
+2. If there are MULTIPLE MCQs visible on screen, respond with only "M".
+3. If there are NO MCQs visible on screen, respond with only "N".
 
-Your response must be EXACTLY one character: the answer letter (A/B/C/D/etc.), "M", or "N".
-Do not include any explanation, punctuation, or additional text.`;
+IMPORTANT: 
+- Read the question carefully and analyze all options before answering
+- Your response must be EXACTLY ONE character: A, B, C, D, M, or N
+- Do NOT add any explanation, punctuation, quotes, or extra text
+- Just output the single letter answer`;
 
-    const result = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          mimeType: 'image/png',
-          data: base64Image
+    const payload = JSON.stringify({
+      model: 'openai/gpt-4o-mini',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: prompt
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:image/jpeg;base64,${base64Image}`
+              }
+            }
+          ]
         }
-      }
-    ]);
+      ]
+    });
 
-    const response = await result.response;
-    const text = response.text().trim().toUpperCase();
+    const data = await new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'openrouter.ai',
+        port: 443,
+        path: '/api/v1/chat/completions',
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'HTTP-Referer': 'https://github.com/TechyCSR/OpenCluely',
+          'X-Title': 'OpenCluely MCQ Detector'
+        },
+        timeout: 30000 // 30 second timeout
+      };
+
+      const req = https.request(options, (res) => {
+        let responseData = '';
+        
+        res.on('data', (chunk) => {
+          responseData += chunk;
+        });
+        
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`API error: ${res.statusCode} - ${responseData}`));
+          } else {
+            try {
+              resolve(JSON.parse(responseData));
+            } catch (e) {
+              reject(new Error(`Invalid JSON response: ${responseData}`));
+            }
+          }
+        });
+      });
+
+      req.on('error', (error) => {
+        reject(error);
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+
+      req.write(payload);
+      req.end();
+    });
+
+    const text = data.choices[0].message.content.trim().toUpperCase();
     
     // Return only first character to ensure single letter
     return text.charAt(0);
@@ -205,8 +280,8 @@ async function handleScreenshotShortcut() {
 
 // App lifecycle
 app.whenReady().then(() => {
-  if (!initializeGemini()) {
-    console.error('Failed to initialize Gemini. Please set GEMINI_API_KEY in .env file');
+  if (!initializeOpenRouter()) {
+    console.error('Failed to initialize OpenRouter. Please set OPENROUTER_API_KEY in .env file');
     app.quit();
     return;
   }
