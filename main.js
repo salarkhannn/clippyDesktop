@@ -2,30 +2,28 @@ require("dotenv").config();
 
 const { app, BrowserWindow, globalShortcut, screen } = require("electron");
 const { desktopCapturer } = require('electron');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 
 let resultWindow = null;
-let genAI = null;
-let model = null;
+let groqClient = null;
 
-// Initialize Gemini
-function initializeGemini() {
-  const apiKey = process.env.GEMINI_API_KEY;
+// Initialize Groq
+function initializeGroq() {
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    console.error('GEMINI_API_KEY not found in .env file');
+    console.error('GROQ_API_KEY not found in .env file');
     return false;
   }
-  
-  genAI = new GoogleGenerativeAI(apiKey);
-  model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  console.log('Gemini initialized successfully');
+
+  groqClient = new Groq({ apiKey });
+  console.log('Groq initialized successfully');
   return true;
 }
 
 // Create small result window at bottom-right
 function createResultWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  
+
   resultWindow = new BrowserWindow({
     width: 80,
     height: 80,
@@ -100,17 +98,17 @@ function createResultWindow() {
     </body>
     </html>
   `;
-  
+
   resultWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 }
 
 // Show result in window
 function showResult(text) {
   if (!resultWindow || resultWindow.isDestroyed()) return;
-  
+
   resultWindow.webContents.send('update-result', text);
   resultWindow.show();
-  
+
   // Auto-hide after 3 seconds
   setTimeout(() => {
     if (resultWindow && !resultWindow.isDestroyed()) {
@@ -139,15 +137,15 @@ async function captureScreenshot() {
   }
 }
 
-// Analyze screenshot with Gemini
+// Analyze screenshot with Groq
 async function analyzeMCQ(imageBuffer) {
-  if (!model) {
-    throw new Error('Gemini not initialized');
+  if (!groqClient) {
+    throw new Error('Groq not initialized');
   }
 
   try {
     const base64Image = imageBuffer.toString('base64');
-    
+
     const prompt = `Analyze this screenshot and detect Multiple Choice Questions (MCQs).
 
 Rules:
@@ -158,23 +156,34 @@ Rules:
 Your response must be EXACTLY one character: the answer letter (A/B/C/D/etc.), "M", or "N".
 Do not include any explanation, punctuation, or additional text.`;
 
-    const result = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          mimeType: 'image/png',
-          data: base64Image
+    const response = await groqClient.chat.completions.create({
+      model: 'meta-llama/llama-4-maverick-17b-128e-instruct',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: prompt
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:image/png;base64,${base64Image}`
+              }
+            }
+          ]
         }
-      }
-    ]);
+      ],
+      max_tokens: 10
+    });
 
-    const response = await result.response;
-    const text = response.text().trim().toUpperCase();
-    
+    const text = response.choices[0]?.message?.content?.trim().toUpperCase() || '';
+
     // Return only first character to ensure single letter
     return text.charAt(0);
   } catch (error) {
-    console.error('Gemini analysis failed:', error);
+    console.error('Groq analysis failed:', error);
     throw error;
   }
 }
@@ -182,20 +191,20 @@ Do not include any explanation, punctuation, or additional text.`;
 // Handle screenshot shortcut
 async function handleScreenshotShortcut() {
   console.log('Screenshot shortcut triggered');
-  
+
   // Show loading spinner
   if (resultWindow && !resultWindow.isDestroyed()) {
     resultWindow.webContents.send('show-loading');
     resultWindow.show();
   }
-  
+
   try {
     const imageBuffer = await captureScreenshot();
     console.log('Screenshot captured');
-    
+
     const result = await analyzeMCQ(imageBuffer);
     console.log('Analysis result:', result);
-    
+
     showResult(result);
   } catch (error) {
     console.error('Error processing screenshot:', error);
@@ -205,24 +214,24 @@ async function handleScreenshotShortcut() {
 
 // App lifecycle
 app.whenReady().then(() => {
-  if (!initializeGemini()) {
-    console.error('Failed to initialize Gemini. Please set GEMINI_API_KEY in .env file');
+  if (!initializeGroq()) {
+    console.error('Failed to initialize Groq. Please set GROQ_API_KEY in .env file');
     app.quit();
     return;
   }
 
   createResultWindow();
 
-  // Register global shortcut: Ctrl+Shift+Q (not commonly used)
-  const registered = globalShortcut.register('CommandOrControl+Shift+Q', handleScreenshotShortcut);
-  
+  // Register global shortcut: Ctrl+Shift+R
+  const registered = globalShortcut.register('CommandOrControl+Shift+R', handleScreenshotShortcut);
+
   if (registered) {
-    console.log('Global shortcut registered: Ctrl+Shift+Q (Cmd+Shift+Q on Mac)');
+    console.log('Global shortcut registered: Ctrl+Shift+R (Cmd+Shift+R on Mac)');
   } else {
     console.error('Failed to register global shortcut');
   }
 
-  console.log('MCQ Detector ready. Press Ctrl+Shift+Q to analyze screen.');
+  console.log('MCQ Detector ready. Press Ctrl+Shift+R to analyze screen.');
 });
 
 app.on('will-quit', () => {
