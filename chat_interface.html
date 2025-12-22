@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Chat</title>
+  <link href="./src/styles/common.css" rel="stylesheet" />
+  <style>
+    body {
+      background: transparent !important;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .chat-container {
+      width: 100%;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.4); /* More transparent */
+      backdrop-filter: blur(10px); /* Less blur for more transparency feel aka 'less visible' */
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.05); /* Even more subtle border */
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Minimal Header */
+    .chat-header {
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      display: flex;
+      justify-content: flex-end; /* Only close button needed essentially */
+      align-items: center;
+      -webkit-app-region: drag;
+      cursor: move;
+      height: 24px;
+    }
+
+    .close-btn {
+      -webkit-app-region: no-drag;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.3);
+      cursor: pointer;
+      font-size: 16px; /* text-based X */
+      padding: 0 4px;
+      line-height: 1;
+      transition: color 0.2s;
+    }
+
+    .close-btn:hover {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .chat-messages {
+      flex: 1;
+      padding: 12px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .message {
+      max-width: 90%; /* Allow more width */
+      padding: 2px 0; /* Minimal padding, closer to text document style */
+      font-size: 13px;
+      line-height: 1.5;
+      word-wrap: break-word;
+      animation: fadeIn 0.2s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(2px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message.user {
+      align-self: flex-end;
+      color: rgba(255, 255, 255, 0.95);
+      text-align: right;
+      background: transparent !important;
+      border: none !important;
+    }
+
+    .message.assistant {
+      align-self: flex-start;
+      color: rgba(255, 255, 255, 0.8);
+      background: transparent !important;
+      border: none !important;
+    }
+    
+    /* Markdown Styles - enforced subtlety */
+    .message.assistant strong { font-weight: 600; color: #fff; }
+    .message.assistant em { font-style: italic; color: rgba(255,255,255,0.7); }
+    .message.assistant code { 
+      background: rgba(255,255,255,0.1); 
+      padding: 2px 4px; 
+      border-radius: 3px; 
+      font-family: monospace; 
+      font-size: 11px;
+    }
+    .message.assistant pre {
+      background: rgba(0,0,0,0.3);
+      padding: 8px;
+      border-radius: 4px;
+      overflow-x: auto;
+      margin: 4px 0;
+    }
+    .message.assistant p { margin: 4px 0; }
+    .message.assistant ul, .message.assistant ol { margin: 4px 0; padding-left: 20px; }
+    /* Headers -> flatten sizes */
+    .message.assistant h1, .message.assistant h2, .message.assistant h3, .message.assistant h4 {
+        font-size: 13px; /* Force same size */
+        font-weight: 700;
+        margin: 8px 0 4px 0;
+        color: #fff;
+    }
+
+    .message-image {
+        max-width: 100%;
+        border-radius: 4px;
+        margin-top: 4px;
+        border: 1px solid rgba(255,255,255,0.1);
+        opacity: 0.8;
+    }
+
+    .chat-input-area {
+      padding: 10px;
+      background: transparent;
+      /* No border top needed if minimal */
+      display: flex;
+      gap: 6px;
+      align-items: flex-end;
+    }
+
+    .input-wrapper {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.05); 
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.2s;
+    }
+
+    .input-wrapper:focus-within {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .chat-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 13px;
+      outline: none;
+      resize: none;
+      max-height: 60px;
+      min-height: 18px;
+      line-height: 1.4;
+      padding: 0;
+      margin: 0;
+    }
+    
+    .chat-input::placeholder {
+        color: rgba(255, 255, 255, 0.3);
+    }
+
+    .action-btn {
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.4);
+      cursor: pointer;
+      padding: 2px;
+      font-size: 16px; /* icons replaced by text or simple chars? User said remove icons. I will use simple unicode or SVG if needed, or just text keys like '+' */
+      font-family: inherit;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s;
+    }
+
+    .action-btn:hover {
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 2px; }
+    
+    .screenshot-preview {
+        display: none;
+        padding: 4px 12px 0 12px;
+        position: relative;
+    }
+    
+    .preview-img {
+        max-height: 60px;
+        border-radius: 4px;
+        border: 1px solid rgba(255,255,255,0.1);
+        opacity: 0.7;
+    }
+    
+    .remove-screenshot {
+        position: absolute;
+        top: 0;
+        left: 0; /* will adjust */
+        background: rgba(0,0,0,0.8);
+        color: white;
+        border: none;
+        width: 16px;
+        height: 16px;
+        font-size: 10px;
+        cursor: pointer;
+        display: flex; 
+        align-items: center; 
+        justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="chat-container">
+    <div class="chat-header">
+      <button class="close-btn" id="closeBtn">×</button>
+    </div>
+
+    <div class="chat-messages" id="messages">
+      <!-- Start empty or with subtle welcome -->
+      <div class="message assistant" id="welcomeMsg">Ready.</div>
+    </div>
+    
+    <div class="screenshot-preview" id="screenshotPreview">
+        <img src="" id="previewImg" class="preview-img" />
+        <button class="remove-screenshot" id="removeScreenshot">×</button>
+    </div>
+
+    <div class="chat-input-area">
+      <div class="input-wrapper">
+        <button class="action-btn" id="screenshotBtn" title="Add Screenshot">+</button>
+        <textarea id="chatInput" class="chat-input" placeholder="Type..." rows="1"></textarea>
+        <button class="action-btn" id="sendBtn" title="Send">➤</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="lib/markdown.js"></script>
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    const messagesContainer = document.getElementById('messages');
+    const chatInput = document.getElementById('chatInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const screenshotBtn = document.getElementById('screenshotBtn');
+    const closeBtn = document.getElementById('closeBtn');
+    const screenshotPreview = document.getElementById('screenshotPreview');
+    const previewImg = document.getElementById('previewImg');
+    const removeScreenshotBtn = document.getElementById('removeScreenshot');
+    const welcomeMsg = document.getElementById('welcomeMsg');
+
+    let currentScreenshot = null;
+
+    chatInput.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+    });
+
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    sendBtn.addEventListener('click', sendMessage);
+
+    closeBtn.addEventListener('click', () => {
+      ipcRenderer.send('hide-chat');
+    });
+    
+    screenshotBtn.addEventListener('click', () => {
+        ipcRenderer.send('request-screenshot-for-chat');
+    });
+    
+    removeScreenshotBtn.addEventListener('click', () => {
+        clearScreenshot();
+    });
+
+    ipcRenderer.on('chat-screenshot-captured', (event, base64Image) => {
+        currentScreenshot = base64Image;
+        previewImg.src = base64Image;
+        screenshotPreview.style.display = 'block';
+        chatInput.focus();
+    });
+
+    function clearScreenshot() {
+        currentScreenshot = null;
+        previewImg.src = '';
+        screenshotPreview.style.display = 'none';
+    }
+
+    function sendMessage() {
+      const text = chatInput.value.trim();
+      if (!text && !currentScreenshot) return;
+
+      if (welcomeMsg) welcomeMsg.style.display = 'none';
+
+      addMessage(text, 'user', currentScreenshot);
+      ipcRenderer.send('chat-message', { text, image: currentScreenshot });
+
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+      clearScreenshot();
+      
+      addLoadingHelper();
+    }
+
+    function addMessage(text, type, imageSrc = null) {
+      const div = document.createElement('div');
+      div.className = `message ${type}`;
+      
+      if (imageSrc) {
+          const img = document.createElement('img');
+          img.src = imageSrc;
+          img.className = 'message-image';
+          div.appendChild(img);
+          div.appendChild(document.createElement('br'));
+      }
+      
+      if (type === 'assistant') {
+          // Parse markdown
+          try {
+             // markdown.toHTML comes from lib/markdown.js
+             div.innerHTML = markdown.toHTML(text);
+          } catch(e) {
+             div.textContent = text;
+          }
+      } else {
+          div.textContent = text;
+      }
+      
+      messagesContainer.appendChild(div);
+      scrollToBottom();
+    }
+    
+    let loadingDiv = null;
+    function addLoadingHelper() {
+        if (loadingDiv) return;
+        loadingDiv = document.createElement('div');
+        loadingDiv.className = 'message assistant';
+        loadingDiv.textContent = '...';
+        messagesContainer.appendChild(loadingDiv);
+        scrollToBottom();
+    }
+    
+    function removeLoadingHelper() {
+        if (loadingDiv) {
+            loadingDiv.remove();
+            loadingDiv = null;
+        }
+    }
+
+    function scrollToBottom() {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    ipcRenderer.on('chat-reply', (event, replyText) => {
+      removeLoadingHelper();
+      addMessage(replyText, 'assistant');
+    });
+  </script>
+</body>
+</html>

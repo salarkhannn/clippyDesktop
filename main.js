@@ -1,10 +1,11 @@
 require("dotenv").config();
 
-const { app, BrowserWindow, globalShortcut, screen } = require("electron");
+const { app, BrowserWindow, globalShortcut, screen, ipcMain } = require("electron");
 const { desktopCapturer } = require('electron');
 const Groq = require('groq-sdk');
 
 let resultWindow = null;
+let chatWindow = null;
 let groqClient = null;
 
 // Initialize Groq
@@ -100,6 +101,38 @@ function createResultWindow() {
   `;
 
   resultWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+}
+
+// Create chat window
+function createChatWindow() {
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  // USER ASKED FOR SMALLER INTERFACE
+  const windowWidth = 320;
+  const windowHeight = 350;
+
+  chatWindow = new BrowserWindow({
+    width: windowWidth,
+    height: windowHeight,
+    x: screenWidth - windowWidth - 20, // 20px padding from right
+    y: screenHeight - windowHeight - 20, // 20px padding from bottom
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true, // User requested resizable
+    show: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  chatWindow.loadFile('chat_interface.html');
+
+  // Handle window closed
+  chatWindow.on('closed', () => {
+    chatWindow = null;
+  });
 }
 
 // Show result in window
@@ -212,6 +245,87 @@ async function handleScreenshotShortcut() {
   }
 }
 
+// Toggle Chat Window
+function toggleChatWindow() {
+  if (!chatWindow) {
+    createChatWindow();
+  }
+
+  if (chatWindow.isVisible()) {
+    chatWindow.hide();
+  } else {
+    chatWindow.show();
+    chatWindow.focus();
+  }
+}
+
+// IPC Handlers
+ipcMain.on('hide-chat', () => {
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.hide();
+  }
+});
+
+ipcMain.on('request-screenshot-for-chat', async (event) => {
+  try {
+    const imageBuffer = await captureScreenshot();
+    // Send as data URL
+    const base64Image = `data:image/png;base64,${imageBuffer.toString('base64')}`;
+    event.sender.send('chat-screenshot-captured', base64Image);
+  } catch (error) {
+    console.error('Failed to capture screenshot for chat:', error);
+  }
+});
+
+ipcMain.on('chat-message', async (event, { text, image }) => {
+  if (!groqClient) {
+    event.sender.send('chat-reply', 'Error: Groq not initialized. Check .env file.');
+    return;
+  }
+
+  try {
+    const messages = [
+      {
+        role: 'system',
+        content: 'You are a helpful assistant. You must use the SAME font size for everything. You can use bold and italics, but DO NOT use headers (#, ##) or any markdown that changes the font size. Keep your responses concise and subtle.'
+      },
+      {
+        role: 'user',
+        content: []
+      }
+    ];
+
+    if (text) {
+      messages[1].content.push({ type: 'text', text: text });
+    }
+
+    if (image) {
+      // image is already a data URL from the renderer/main capture flow
+      messages[1].content.push({
+        type: 'image_url',
+        image_url: { url: image }
+      });
+    }
+
+    const completion = await groqClient.chat.completions.create({
+      model: 'meta-llama/llama-4-maverick-17b-128e-instruct', // Switching to 11b vision as 90b was 404ing
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: 1024,
+      top_p: 1,
+      stop: null,
+      stream: false
+    });
+
+    const reply = completion.choices[0]?.message?.content || 'No response';
+    event.sender.send('chat-reply', reply);
+
+  } catch (error) {
+    console.error('Groq chat error:', error);
+    event.sender.send('chat-reply', `Error: ${error.message}`);
+  }
+});
+
 // App lifecycle
 app.whenReady().then(() => {
   if (!initializeGroq()) {
@@ -221,6 +335,7 @@ app.whenReady().then(() => {
   }
 
   createResultWindow();
+  createChatWindow();
 
   // Register global shortcut: Ctrl+Shift+R
   const registered = globalShortcut.register('CommandOrControl+Shift+R', handleScreenshotShortcut);
@@ -229,6 +344,14 @@ app.whenReady().then(() => {
     console.log('Global shortcut registered: Ctrl+Shift+R (Cmd+Shift+R on Mac)');
   } else {
     console.error('Failed to register global shortcut');
+  }
+
+  // Register Chat Shortcut: Ctrl+Shift+T
+  const chatRegistered = globalShortcut.register('CommandOrControl+Shift+T', toggleChatWindow);
+  if (chatRegistered) {
+    console.log('Global shortcut registered: Ctrl+Shift+T for Chat');
+  } else {
+    console.error('Failed to register chat shortcut');
   }
 
   console.log('MCQ Detector ready. Press Ctrl+Shift+R to analyze screen.');
