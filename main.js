@@ -170,7 +170,6 @@ async function captureScreenshot() {
   }
 }
 
-// Analyze screenshot with Groq
 async function analyzeMCQ(imageBuffer) {
   if (!groqClient) {
     throw new Error('Groq not initialized');
@@ -179,25 +178,15 @@ async function analyzeMCQ(imageBuffer) {
   try {
     const base64Image = imageBuffer.toString('base64');
 
-    const prompt = `Analyze this screenshot and detect Multiple Choice Questions (MCQs).
-
-Rules:
-1. If there is exactly ONE complete MCQ visible with options (A, B, C, D, etc.), respond with ONLY the letter of the correct answer (e.g., "A", "B", "C", "D").
-2. If there are MULTIPLE MCQs visible on the screen, respond with ONLY the letter "M".
-3. If there are NO MCQs visible on the screen, respond with ONLY the letter "N".
-
-Your response must be EXACTLY one character: the answer letter (A/B/C/D/etc.), "M", or "N".
-Do not include any explanation, punctuation, or additional text.`;
-
-    const response = await groqClient.chat.completions.create({
-      model: 'meta-llama/llama-4-maverick-17b-128e-instruct',
+    const extractionRequest = await groqClient.chat.completions.create({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
       messages: [
         {
           role: 'user',
           content: [
             {
               type: 'text',
-              text: prompt
+              text: 'You are an OCR tool. Your ONLY job is to transcribe the text visible in the image exactly as it appears. DO NOT attempt to answer or solve any questions. If there is exactly ONE complete MCQ visible, transcribe its full text verbatim. If there are MULTIPLE MCQs visible, output EXACTLY "M". If there are NO MCQs visible, output EXACTLY "N".'
             },
             {
               type: 'image_url',
@@ -208,15 +197,64 @@ Do not include any explanation, punctuation, or additional text.`;
           ]
         }
       ],
-      max_tokens: 10
+      max_tokens: 1024,
+      temperature: 0.1
     });
 
-    const text = response.choices[0]?.message?.content?.trim().toUpperCase() || '';
+    const extractedText = extractionRequest.choices[0]?.message?.content?.trim();
+    console.log('--- DEBUG STEP 1 (Extraction) ---');
+    console.log('Model:', 'meta-llama/llama-4-scout-17b-16e-instruct');
+    console.log('Extracted Text:', extractedText);
 
-    // Return only first character to ensure single letter
-    return text.charAt(0);
+    if (!extractedText) {
+      throw new Error('Empty extraction payload');
+    }
+
+    // If step 1 returned M or N, we don't even need step 2.
+    if (extractedText === 'M' || extractedText === 'N') {
+      console.log('Returning early from Step 1:', extractedText);
+      return extractedText;
+    }
+
+    const evaluationRequest = await groqClient.chat.completions.create({
+      model: 'openai/gpt-oss-120b',
+      messages: [
+        {
+          role: 'user',
+          content: `You are an expert answering a Multiple Choice Question. Read the question below and determine the correct answer.
+
+Question:
+${extractedText}
+
+Respond with ONLY the single letter of the correct option (A, B, C, or D). Do not include any other text, punctuation, or explanation.`
+        }
+      ],
+      temperature: 0.1
+    });
+
+    const finalResult = evaluationRequest.choices[0]?.message?.content?.trim();
+    console.log('--- DEBUG STEP 2 (Evaluation) ---');
+    console.log('Model:', 'openai/gpt-oss-120b');
+    console.log('Raw Final Result:', finalResult);
+
+    const uppercaseResult = (finalResult || '').toUpperCase();
+    
+    // Look for a standalone A, B, C, D, M, or N
+    const match = uppercaseResult.match(/(?:^|\s|\b)([A-DMN])(?:\s|\b|$|\.)/);
+    
+    let letterToReturn = 'N';
+    if (match && match[1]) {
+      letterToReturn = match[1];
+    } else if (/[A-DMN]/.test(uppercaseResult)) {
+      // Fallback: just grab the last valid letter mentioned
+      const lastMatch = uppercaseResult.match(/[A-DMN](?!.*[A-DMN])/);
+      if (lastMatch) letterToReturn = lastMatch[0];
+    }
+    
+    console.log('Returning parsed character:', letterToReturn);
+    return letterToReturn;
   } catch (error) {
-    console.error('Groq analysis failed:', error);
+    console.error('Analysis failed:', error);
     throw error;
   }
 }
@@ -308,7 +346,7 @@ ipcMain.on('chat-message', async (event, { text, image }) => {
     }
 
     const completion = await groqClient.chat.completions.create({
-      model: 'meta-llama/llama-4-maverick-17b-128e-instruct', // Switching to 11b vision as 90b was 404ing
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
       messages: messages,
       temperature: 0.7,
       max_tokens: 1024,

@@ -116,112 +116,107 @@ class LLMService {
    * @returns {Promise<{response: string, metadata: object}>}
    */
   async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null) {
-    if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
-    }
-
-    if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
-      throw new Error('Invalid image buffer provided to processImageWithSkill');
-    }
-
     const startTime = Date.now();
     this.requestCount++;
-
+    
     try {
-      // Build system instruction using the skill prompt (with optional language injection)
-      const { promptLoader } = require('../../prompt-loader');
-      const skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage) || '';
-
-      // Build request with text + image parts
-      const base64 = imageBuffer.toString('base64');
-
-      const request = {
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: this.formatImageInstruction(activeSkill, programmingLanguage) },
-              { inlineData: { data: base64, mimeType } }
-            ]
-          }
-        ]
-      };
-
-      this.applyGenerationDefaults(request);
-
-      if (skillPrompt && skillPrompt.trim().length > 0) {
-        request.systemInstruction = { parts: [{ text: skillPrompt }] };
+      if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
+        throw new Error('Invalid image payload');
       }
 
-      // Execute with retries/timeout - try alternative method first for network reliability
-      let responseText;
-      const preferAlternative = !!config.get('llm.gemini.enableFallbackMethod');
-      try {
-        if (preferAlternative) {
-          logger.debug('Attempting alternative HTTPS method first for reliability');
-          responseText = await this.executeAlternativeRequest(request);
-        } else {
-          responseText = await this.executeRequest(request);
-        }
-      } catch (error) {
-        const secondaryLabel = preferAlternative ? 'primary SDK method' : 'alternative HTTPS method';
-        logger.warn(`${preferAlternative ? 'Alternative' : 'Primary'} method failed, trying ${secondaryLabel}`, { error: error.message });
-        const secondaryFn = preferAlternative ? this.executeRequest.bind(this) : this.executeAlternativeRequest.bind(this);
-
-        try {
-          responseText = await secondaryFn(request);
-        } catch (secondaryError) {
-          logger.error('Both Gemini request methods failed', {
-            firstError: error.message,
-            secondError: secondaryError.message
-          });
-          throw secondaryError;
-        }
+      const apiKey = config.getApiKey('GROQ');
+      if (!apiKey) {
+        throw new Error('Service key not configured');
       }
 
-      // Enforce language in code fences if provided
-      const finalResponse = programmingLanguage
-        ? this.enforceProgrammingLanguage(responseText, programmingLanguage)
-        : responseText;
+      const imagePayload = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+      
+      const extractionReq = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Extract text from the image and only return the mcq.' },
+                { type: 'image_url', image_url: { url: imagePayload } }
+              ]
+            }
+          ],
+          temperature: 0.1
+        })
+      });
 
-      logger.logPerformance('LLM image processing', startTime, {
+      if (!extractionReq.ok) {
+        throw new Error(`Network response was not ok: ${extractionReq.statusText}`);
+      }
+
+      const extractedPayload = await extractionReq.json();
+      const extractedContent = extractedPayload.choices?.[0]?.message?.content?.trim();
+
+      if (!extractedContent) {
+        throw new Error('Failed to process image payload');
+      }
+
+      const evaluationReq = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'openai/gpt-oss-120b',
+          messages: [
+            {
+              role: 'system',
+              content: 'Return the correct option only.'
+            },
+            {
+              role: 'user',
+              content: extractedContent
+            }
+          ],
+          temperature: 0.1
+        })
+      });
+
+      if (!evaluationReq.ok) {
+        throw new Error(`Evaluation failed: ${evaluationReq.statusText}`);
+      }
+
+      const evaluationPayload = await evaluationReq.json();
+      const finalResult = evaluationPayload.choices?.[0]?.message?.content?.trim();
+
+      logger.logPerformance('Vision processing', startTime, {
         activeSkill,
-        imageSize: imageBuffer.length,
-        responseLength: finalResponse.length,
-        programmingLanguage: programmingLanguage || 'not specified',
         requestId: this.requestCount
       });
 
       return {
-        response: finalResponse,
+        response: finalResult,
         metadata: {
           skill: activeSkill,
           programmingLanguage,
           processingTime: Date.now() - startTime,
           requestId: this.requestCount,
-          usedFallback: false,
           isImageAnalysis: true,
           mimeType
         }
       };
     } catch (error) {
       this.errorCount++;
-      logger.error('LLM image processing failed', {
+      logger.error('Vision processing failed', {
         error: error.message,
         activeSkill,
         requestId: this.requestCount
       });
-
-      if (config.get('llm.gemini.fallbackEnabled')) {
-        return this.generateFallbackResponse('[image]', activeSkill);
-      }
       throw error;
     }
-  }
-
-  formatImageInstruction(activeSkill, programmingLanguage) {
-    const langNote = programmingLanguage ? ` Use only ${programmingLanguage.toUpperCase()} for any code.` : '';
-    return `Analyze this image for a ${activeSkill.toUpperCase()} question. Extract the problem concisely and provide the best possible solution with explanation and final code.${langNote}`;
   }
 
   async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
